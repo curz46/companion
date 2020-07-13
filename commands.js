@@ -202,12 +202,12 @@ async function whatCommand(client, db, channel, guildId) {
     
     const descriptionChannelId = guildData.channelId || '0';
     const descriptionChannel = client.channels.get(descriptionChannelId);
+    if (!descriptionChannel) {
+        return await channel.send(guildDescriptor, {embed: {description: "`[no description defined]`"}});
+    }
 
     const partnerChannelId = guildData.partnerChannelId || '0';
     const partnerChannel = client.channels.get(partnerChannelId);
-    if (!partnerChannel) {
-        return await channel.send(guildDescriptor, {embed: {description: "`[no description]`"}});
-    }
 
     const guildIdentifier = `\`• ${guild.id} (${guild.name})\``;
     const guildDescriptor = `${guildIdentifier}\n` +
@@ -215,8 +215,10 @@ async function whatCommand(client, db, channel, guildId) {
         `Partner Channel: <#${partnerChannelId}> (${partnerChannel.name})\n`;
 
     const [partnerDescription, createdAt] = await findDescription(descriptionChannel) || '`[no description]`';
-    const footer = `Description | Sent ${createdAt.toLocaleDateString("en-US")}`
-    return await channel.send(guildDescriptor, {embed: {description: partnerDescription, footer: {text: footer}}});
+    const embedText   = partnerDescription ? partnerDescription : `React to a message in <#${descriptionChannelId}> to set the description.`;
+    const embedFooter = `Description | Sent ${createdAt ? createdAt.toLocaleDateString("en-US") : '???'}`;
+    
+    return await channel.send(guildDescriptor, {embed: {description: embedText, footer: {text: embedFooter}}});
 }
 
 async function findDescription(channel) {
@@ -224,7 +226,7 @@ async function findDescription(channel) {
     for (const message of messages) {
         if (message.reactions.size != 0) return [message.content, message.createdAt];
     }
-    return null;
+    return [null, null];
 }
 
 function getGuildDescriptor(client, guildData) {
