@@ -1,5 +1,5 @@
 import datastore from './datastore.js';
-import { groupByLength } from './helpers.js';
+import { groupByLength, isGuildConfigured, createWizard } from './helpers.js';
 
 const CHANNEL_REGEX = /<#(\d{18})>/;
 const SNOWFLAKE_REGEX = /(\d{18})/;
@@ -64,11 +64,11 @@ async function handleCommand(client, db, message, subcmd, args) {
         if (!guildId) {
             return message.channel.send('Error: No matching guilds for that query string.');
         }
-        const descriptionChannel = message.guild.channels.get(channelQuery); 
-        if (!descriptionChannel) {
+        const descriptionChannelId = parseChannel(channelQuery);
+        if (!descriptionChannelId) {
             return message.channel.send('Error: No matching channels for that query string.');
         }
-        return setChannelCommand(client, db, message.channel, guildId, channelQuery);
+        return setChannelCommand(client, db, message.channel, guildId, descriptionChannelId);
     }
     if (subcmd == 'partnerchannel') {
         if (args.length != 2) {
@@ -79,15 +79,26 @@ async function handleCommand(client, db, message, subcmd, args) {
         if (!guildId) {
             return message.channel.send('Error: No matching guilds for that query string.');
         }
-        const partnerChannel = message.guild.channels.get(channelQuery); 
-        if (!partnerChannel) {
+        const partnerChannelId = parseChannel(channelQuery); 
+        if (!partnerChannelId) {
             return message.channel.send('Error: No matching channels for that query string.');
         }
-        return setPartnerChannelCommand(client, db, message.channel, guildId, channelQuery);
+        return setPartnerChannelCommand(client, db, message.channel, guildId, partnerChannelId);
     }
     if (subcmd == 'kill') {
         await message.channel.send('Killing...');
         process.exit(1);
+    }
+    if (subcmd == 'partner') {
+        if (args.length >= 1 && args[0].toLowerCase() == 'all') {
+
+            return;
+        }
+        if (args.length == 0) {
+            return await message.channel.send('Usage: `k!partner <guild1> <guild2> ...');
+        }
+        const guilds = await Promise.all( args.map(async arg => await parseGuild(client, db, arg, true)) );
+
     }
     
     return message.channel.send('Unrecognised subargument. Use `k!help` for help.');
@@ -116,6 +127,13 @@ function printHelp(channel) {
     return channel.send('', {embed: {description: help.join('\n')}});
 }
 
+async function partnerCommand(client, db, guildIds) {
+    const guildDatas = await Promise.all(
+        guildIds.map(id => datastore.findGuild(db, id))
+    );
+
+}
+
 async function setPartnerChannelCommand(client, db, channel, guildId, channelId) {
     await datastore.updateGuild(db, {guildId, partnerChannelId: channelId});
     return await channel.send('Set `partnerChannelId` to `' + channelId + '` for guild `' + guildId + '`');
@@ -134,49 +152,41 @@ async function removeCommand(client, db, channel, guildId) {
 async function addCommand(client, db, message) {
     const {channel} = message;
     // start guild add helper
-    const prefix = '`[ADD WIZARD]` ';
-    const filter = m => m.author.id == message.author.id && m.channel.id == message.channel.id;
-    let response, matches;
-
-    const checkQuit = m => m == null || m.content.toLowerCase().includes('quit');
-    const getResponse = async () => (await channel.awaitMessages(filter, {maxMatches: 1})).array();
+    const wizard = createWizard(message.member, message.channel, '`[ADD WIZARD]:` ');
 
     try {
-        await channel.send(prefix + 'You\'re using the add wizard. Type `quit` at any point to cancel.');
-        
-        await channel.send(prefix + 'Choose a guild. You can use the name or its id.');
-        let [response] = await getResponse();
-        if (checkQuit(response)) return await channel.send(prefix + "Wizard cancelled.");
-        
-        const guildId = await parseGuild(client, db, response.content);
+        await wizard.explain('You started the add wizard.');
+        const guildId = await wizard.parse(
+            'Choose a guild, specifying its name or id.',
+            async content => await parseGuild(client, db, content),
+            'I can\'t find that guild, try again.',
+            guildId => guildId != null && client.guilds.has(guildId)
+        );
         const guild = client.guilds.get(guildId);
-        if (!guild) return await channel.send(prefix + 'Cannot find that guild.');
 
-        await channel.send(`${prefix} guildId = \`${guildId} (${guild.name})\``);
-        await channel.send(prefix + 'Pick a description channel. Can use #channel or id.');
-        [response] = await getResponse();
-        if (checkQuit(response)) return await channel.send(prefix + 'Wizard cancelled.');
+        await wizard.send(`guildId = \`${guildId} (${guild.name})\``);
+        const descriptionChannelId = await wizard.parse(
+            'Pick a description channel. Can use #channel or id.',
+            parseChannel,
+            'I can\'t find that channel, try again.',
+            channelId => channelId != null && message.guild.channels.has(channelId)
+        );
 
-        const descriptionChannelId = parseChannel(response.content);
-        console.log(descriptionChannelId);
-        const descriptionChannel = message.guild.channels.get(descriptionChannelId);
-        if (!descriptionChannel) return await channel.send(prefix + 'Cannot find that channel.');
-        
-        await channel.send(prefix + 'channelId = `' + descriptionChannelId + '`');
-        await channel.send(prefix + 'Pick a partner channel. Can use #channel or id.');
-        [response] = await getResponse();
-        if (checkQuit(response)) return await channel.send(prefix + 'Wizard cancelled.');
-
-        const partnerChannelId = parseChannel(response.content);
+        await wizard.send('channelId = `' + descriptionChannelId + '`');
+        const partnerChannelId = await wizard.parse(
+            'Pick a partner channel. Can use #channel or id.',
+            parseChannel,
+            'I can\'t find that channel, try again.',
+            channelId => channelId != null && guild.channels.has(channelId)
+        );
         const partnerChannel = guild.channels.get(partnerChannelId);
-        if (!partnerChannel) return await channel.send(prefix + 'Cannot find that channel.');
 
-        await channel.send(`${prefix}partnerChannelId = \`${partnerChannelId} (${partnerChannel.name})\``);
+        await wizard.send(`partnerChannelId = \`${partnerChannelId} (${partnerChannel.name})\``);
         await datastore.addGuild(db, {guildId, channelId: descriptionChannelId, partnerChannelId});
-        return await channel.send(prefix + 'Added guild to database.');
+        return await channel.send('✅ Added guild to database');
     } catch (e) {
-        throw e;
-        return await channel.send('Add wizard expired, re-run `k!add` if you still want to add a guild.');
+        console.log(e);
+        return await channel.send('❌ Wizard expired/cancelled, re-run `k!add` if you still want to add a guild');
     }
 }
 
