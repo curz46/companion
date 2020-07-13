@@ -1,9 +1,19 @@
 import datastore from './datastore.js';
+import { groupByLength } from './helpers.js';
 
-// const CHANNEL_REGEX = /<#(\d{18})>/;
+const CHANNEL_REGEX = /<#(\d{18})>/;
 const SNOWFLAKE_REGEX = /(\d{18})/;
 
 async function handleCommand(client, db, message, subcmd, args) {
+    if (subcmd == 'eval') {
+        let result;
+        try {
+            result = eval(args.join(' '));
+        } catch (e) {
+            result = e;
+        }
+        return await message.channel.send('```' + result + '```');
+    }
     if (subcmd == 'help') {
         return printHelp(message.channel);
     }
@@ -43,7 +53,7 @@ async function handleCommand(client, db, message, subcmd, args) {
         if (!guildId) {
             return message.channel.send('Error: No matching guilds for that query string.');
         }
-        return removeGuild(client, db, guildId);
+        return removeCommand(client, db, message.channel, guildId);
     }
     if (subcmd == 'channel') {
         if (args.length != 2) {
@@ -128,8 +138,8 @@ async function addCommand(client, db, message) {
     const filter = m => m.author.id == message.author.id && m.channel.id == message.channel.id;
     let response, matches;
 
-    const checkQuit = m => m.content.toLowerCase().includes('quit');
-    const getResponse = async () => (await channel.awaitMessages(filter, {max: 1})).array();
+    const checkQuit = m => m == null || m.content.toLowerCase().includes('quit');
+    const getResponse = async () => (await channel.awaitMessages(filter, {maxMatches: 1})).array();
 
     try {
         await channel.send(prefix + 'You\'re using the add wizard. Type `quit` at any point to cancel.');
@@ -142,26 +152,27 @@ async function addCommand(client, db, message) {
         const guild = client.guilds.get(guildId);
         if (!guild) return await channel.send(prefix + 'Cannot find that guild.');
 
-        await channel.send(prefix + 'guildId = `' + guildId + '`');
-        await channel.send(prefix + 'Pick a channel. Can use #channel or id.');
+        await channel.send(`${prefix} guildId = \`${guildId} (${guild.name})\``);
+        await channel.send(prefix + 'Pick a description channel. Can use #channel or id.');
         [response] = await getResponse();
         if (checkQuit(response)) return await channel.send(prefix + 'Wizard cancelled.');
 
-        const descriptionChannelId = response.content;
+        const descriptionChannelId = parseChannel(response.content);
+        console.log(descriptionChannelId);
         const descriptionChannel = message.guild.channels.get(descriptionChannelId);
         if (!descriptionChannel) return await channel.send(prefix + 'Cannot find that channel.');
         
-        await channel.send(prefix + 'channelId = `' + channelId + '`');
+        await channel.send(prefix + 'channelId = `' + descriptionChannelId + '`');
         await channel.send(prefix + 'Pick a partner channel. Can use #channel or id.');
         [response] = await getResponse();
         if (checkQuit(response)) return await channel.send(prefix + 'Wizard cancelled.');
 
-        const partnerChannelId = response.content;
+        const partnerChannelId = parseChannel(response.content);
         const partnerChannel = guild.channels.get(partnerChannelId);
         if (!partnerChannel) return await channel.send(prefix + 'Cannot find that channel.');
 
         await channel.send(`${prefix}partnerChannelId = \`${partnerChannelId} (${partnerChannel.name})\``);
-        await datastore.addGuild(db, {guildId, channelId, partnerChannelId});
+        await datastore.addGuild(db, {guildId, channelId: descriptionChannelId, partnerChannelId});
         return await channel.send(prefix + 'Added guild to database.');
     } catch (e) {
         throw e;
@@ -174,11 +185,11 @@ async function allCommand(client, db, channel) {
     if (!guilds.length) {
         return await channel.send('There are no guilds in the database.');
     }
-    for (const guildData of guilds) {
-        const guildDescriptor = getGuildDescriptor(client, guildData);
-        await channel.send(guildDescriptor);
+    let descriptors = guilds.map(guildData => getGuildDescriptor(client, guildData));
+    descriptors.push('Note: description is omitted when using `k!all`. use `k!what` to see description.');
+    for (const content of groupByLength(descriptors, '\n', 2000)) {
+        await channel.send(content)
     }
-    return await channel.send('Note: description is omitted when using `k!all`. use `k!what` to see description.')
 }
 
 async function whatCommand(client, db, channel, guildId) {
@@ -203,14 +214,15 @@ async function whatCommand(client, db, channel, guildId) {
         `Channel: <#${descriptionChannelId}>\n` +
         `Partner Channel: <#${partnerChannelId}> (${partnerChannel.name})\n`;
 
-    const partnerDescription = await findDescription(descriptionChannel) || '`[no description]`';
-    return await channel.send(guildDescriptor, {embed: {title: "Description", description: partnerDescription}});
+    const [partnerDescription, createdAt] = await findDescription(descriptionChannel) || '`[no description]`';
+    const footer = `Description | Sent ${createdAt.toLocaleDateString("en-US")}`
+    return await channel.send(guildDescriptor, {embed: {description: partnerDescription, footer: {text: footer}}});
 }
 
 async function findDescription(channel) {
     const messages = (await channel.fetchMessages({limit: 50})).array();
     for (const message of messages) {
-        if (message.reactions.size != 0) return message.content;
+        if (message.reactions.size != 0) return [message.content, message.createdAt];
     }
     return null;
 }
@@ -222,32 +234,45 @@ function getGuildDescriptor(client, guildData) {
 
     const guildId = guildData.guildId || '0';
     const guild = client.guilds.get(guildId);
+
+    if (guild == null) {
+        return '`not in guild`';
+    }
     
     const channelId = guildData.channelId || '0';
-    const channel = client.channels.get(channelId);
 
     const partnerChannelId = guildData.partnerChannelId || '0';
-    const partnerChannel = client.channels.get(partnerChannelId);
+    const partnerChannel = guild.channels.get(partnerChannelId);
+    const partnerChannelName = partnerChannel ? partnerChannel.name : 'not cached';
 
     const guildIdentifier = `\`• ${guild.id} (${guild.name})\``;
 
     return `${guildIdentifier}\n` +
-        `Channel: <#${channel.id}>\n` +
-        `Partner Channel: <#${partnerChannelId}> (${partnerChannel.name})\n`;
+        `Channel: <#${channelId}>\n` +
+        `Partner Channel: <#${partnerChannelId}> (${partnerChannelName})\n`;
 }
 
-// function parseChannel(string) {
-//     let matches;
-//     matches = CHANNEL_REGEX.exec(string);
-//     if (matches != null && matches.length == 2) return matches[1];
-//     matches = SNOWFLAKE_REGEX.exec(string);
-//     if (matches != null && matches.length == 2) return matches[1];
-//     return null;
-// }
+function parseChannel(string) {
+    let matches;
+    matches = CHANNEL_REGEX.exec(string);
+    if (matches != null && matches.length == 2) return matches[1];
+    matches = SNOWFLAKE_REGEX.exec(string);
+    if (matches != null && matches.length == 2) return matches[1];
+    return null;
+}
 
 async function parseGuild(client, db, string, checkChannel=false) {
     if (string == null) return null;
-    const matches = SNOWFLAKE_REGEX.exec(string);
+    let matches;
+    if (checkChannel) {
+        matches = CHANNEL_REGEX.exec(string);
+        if (matches != null && matches.length == 2) {
+            const channelId = matches[1];
+            const found = db.queryGuilds(db, {channelId});
+            if (found.length) return found[0].guildId;
+        }
+    }
+    matches = SNOWFLAKE_REGEX.exec(string);
     if (matches != null && matches.length == 2) {
         return matches[1];
     }

@@ -26,7 +26,7 @@ async function start() {
         }
     
         const substring = message.content.substring(COMMAND_PREFIX.length);
-        const segments = substring.match(/\w+|"[^"]+"/g);
+        const segments = substring.match(/[^ "]+|"[^"]+"/g);
         const [subarg, ...args] = segments;
         try {
             await handleCommand(client, db, message, subarg, args);
