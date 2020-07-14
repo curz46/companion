@@ -21,6 +21,10 @@ async function start() {
     const db = await getDatabase(process.env);
 
     client.on('message', async message => {
+        if (!['194579302631604224', '105993740841144320', '730733869925662760'].includes(message.author.id)) {
+            return;
+        }
+
         if (!message.content.startsWith(COMMAND_PREFIX)) {
             return;
         }
