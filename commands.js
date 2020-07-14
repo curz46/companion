@@ -1,5 +1,11 @@
 import datastore from './datastore.js';
-import { groupByLength, isGuildConfigured, createWizard } from './helpers.js';
+import { groupByLength,
+         isGuildConfigured,
+         createWizard,
+         checkWritePermission,
+         partnerWithDescription,
+         partnerWithGuild } from './helpers.js';
+import { create as createBar } from './progress.js';
 
 const CHANNEL_REGEX = /<#(\d{18})>/;
 const SNOWFLAKE_REGEX = /(\d{18})/;
@@ -91,14 +97,36 @@ async function handleCommand(client, db, message, subcmd, args) {
     }
     if (subcmd == 'partner') {
         if (args.length >= 1 && args[0].toLowerCase() == 'all') {
-
-            return;
+            const guilds = await datastore.getGuilds(db);
+            try {
+                return await partnerCommand(client, db, message, guilds);
+            } catch (e) {
+                if (e.constructor == QuitError) {
+                    return await message.channel.send('❌ Wizard expired/cancelled, re-run `k!partner` if you still want to partner.');
+                } else {
+                    return await message.channel.send('❌ An error occurred:```' + e.message + '```');
+                }
+            }
         }
         if (args.length == 0) {
-            return await message.channel.send('Usage: `k!partner <guild1> <guild2> ...');
+            return await message.channel.send('Usage: `k!partner <guild1> <guild2> ...`');
         }
-        const guilds = await Promise.all( args.map(async arg => await parseGuild(client, db, arg, true)) );
-
+        const guildIds = await Promise.all(
+            args.map(arg => parseGuild(client, db, arg, true))
+        );
+        console.log(guildIds);
+        const guilds = await Promise.all(
+            guildIds.map(async id => await datastore.findGuild(db, id))
+        );
+        try {
+            return await partnerCommand(client, db, message, guilds);
+        } catch (e) {
+            if (e.constructor == QuitError) {
+                return await message.channel.send('❌ Wizard expired/cancelled, re-run `k!partner` if you still want to partner.');
+            } else {
+                return await message.channel.send('❌ An error occurred:```' + e.message + '```');
+            }
+        }
     }
     
     return message.channel.send('Unrecognised subargument. Use `k!help` for help.');
@@ -127,11 +155,123 @@ function printHelp(channel) {
     return channel.send('', {embed: {description: help.join('\n')}});
 }
 
-async function partnerCommand(client, db, guildIds) {
-    const guildDatas = await Promise.all(
-        guildIds.map(id => datastore.findGuild(db, id))
+async function partnerCommand(client, db, message, guilds) {
+    const wizard = createWizard(message.member, message.channel, '`[PARTNER WIZARD]:` ');
+    await wizard.explain(
+        'You\'ve started the mass partner wizard. A mass partner is a one-to-many partner, like so:\n\n' +
+        '`guild1, guild2, guild3` partnered with subject `guild4` would result in: ' +
+        '`guild1 x guild4`, `guild2 x guild4`, `guild3 x guild4` (where `x` denotes a partner)\n\n' +
+        `You've selected ${guilds.length} guilds: ` + guilds.map(data => `<#${data.channelId}>`).join(' ')
     );
+    const amendments = [];
+    guilds = guilds.filter(data => {
+        if (!isGuildConfigured(data)) {
+            amendments.push(`Removed ${data.guildId} (<${data.channelId}>) because it is improperly configured.`);
+            return false;
+        }
+        return true;
+    });
+    // fill resolved guild/channels into data
+    for (const data of guilds) {
+        data.guild = client.guilds.get(data.guildId);
+        data.channel = message.guild.channels.get(data.channelId);
+        data.partnerChannel = data.guild.channels.get(data.partnerChannelId);
+        [data.description] = await findDescription(data.channel);
+    }
+    guilds = guilds.filter(data => {
+        if (!data.guild || !data.channel || !data.partnerChannel || !data.description) {
+            amendments.push(`Removed ${data.guildId} (<${data.channelId}>) because its configured values are missing.`);
+            return false;
+        }
+        if (!checkWritePermission(data)) {
+            amendments.push(`Removed ${data.guildId} (<${data.channelId}>) because <#${data.partnerChannelId}> has bad permissions.`)
+            return false;
+        }
+        return true;
+    });
+    // if there were changes to the array
+    if (amendments.length) {
+        amendments.push('This leaves ' + guilds.map(data => `<#${data.channelId}>`).join(' '));
+    }
+    for (const amendment of groupByLength(amendments, '\n', 2000)) {
+        await wizard.send(amendment);
+    }
+    if (guilds.length == 0) {
+        return await wizard.send('There are no guilds to partner with, exiting wizard...');
+    }
+    const type = await wizard.ask(
+        'Do you want to give a description or a registered guild? (`description`|`guild`)',
+        'The subject type must be `description` or `guild`',
+        choice => 'description'.startsWith(choice) || 'guild'.startsWith(choice)
+    );
+    let emitter;
+    if ('description'.startsWith(type)) {
+        const subjectDescription = await wizard.ask('Paste the description (without a codeblock):');
+        let plan = ['Partner execution plan:'];
+        const posts = guilds.map(data => {
+            return `• Post \`1\` message in \`${data.guild.name} #${data.partnerChannel.name}\` (<#${data.partnerChannelId}>)`
+        });
+        plan = plan.concat(posts);
+        // for (const plan of groupByLength(plan, '\n', 2000)) {
+        //     await wizard.send(plan);
+        // }
+        plan.push('Should I go ahead with the mass partner?');
+        const reaction = await wizard.react(plan.join('\n'), ['✅']);
+        if (reaction != '✅') return;
+        emitter = partnerWithDescription(client, guilds, subjectDescription);
+    } else if ('guild'.startsWith(type)) {
+        const subject = await wizard.parse(
+            'Choose a guild, specifying its name or id.',
+            async content => {
+                const guildId = await parseGuild(client, db, content);
+                if (guildId == null) return null;
+                return await datastore.findGuild(db, guildId);
+            },
+            'I can\'t find that guild, try again.',
+            data => data != null && client.guilds.has(data.guildId)
+        );
+        subject.guild = client.guilds.get(subject.guildId);
+        subject.channel = message.guild.channels.get(subject.channelId);
+        subject.partnerChannel = subject.guild.channels.get(subject.partnerChannelId);
+        [subject.description] = await findDescription(subject.channel);
 
+        let plan = ['Partner execution plan:'];
+        const posts = guilds.map(data => {
+            return `• Post \`1\` message in \`${data.guild.name} #${data.partnerChannel.name}\` (<#${data.partnerChannelId}>)`
+        });
+        plan = plan.concat(posts);
+        plan.push(`• Post \`${guilds.length}\` messages in \`${subject.guild.name} #${subject.partnerChannel.name}\` (<#${subject.partnerChannelId}>)`);
+        plan.push('Should I go ahead with the mass partner?');
+        const reaction = await wizard.react(plan.join('\n'), ['✅']);
+        if (reaction != '✅') return;
+        emitter = partnerWithGuild(client, guilds, subject);
+    } else {
+        return;
+    }
+
+    const bar = createBar(guilds.length);
+    const progress = await message.channel.send('', {embed: {description: bar.draw('STARTING')}});
+    emitter.on('failed', ([data, reason]) => {
+        bar.tick();
+        progress.edit('', {embed: {description: bar.draw('IN PROGRESS')}});
+        message.channel.send(`Partner with \`${data.guild.name}\` (<#${data.channelId}>) failed, reason: \`${reason}\``);
+    });
+    emitter.on('success', ([data, _messages]) => {
+        bar.tick();
+        progress.edit('', {embed: {description: bar.draw('IN PROGRESS')}});
+    });
+    emitter.on('finished', () => {
+        message.reply('All done :)');
+        progress.edit('', {embed: {description: bar.draw('COMPLETED')}})
+    });
+    emitter.on('cancelled', () => {
+        progress.edit('', {embed: {description: bar.draw('CANCELLED')}});
+    });
+
+    await progress.react('❌');
+    progress
+        .awaitReactions((reaction, user) => reaction.emoji.name == '❌' && user.id == message.author.id, {max: 1})
+        .then(reaction => { emitter.emit('cancel'); });
 }
 
 async function setPartnerChannelCommand(client, db, channel, guildId, channelId) {
@@ -280,7 +420,7 @@ async function parseGuild(client, db, string, checkChannel=false) {
         matches = CHANNEL_REGEX.exec(string);
         if (matches != null && matches.length == 2) {
             const channelId = matches[1];
-            const found = db.queryGuilds(db, {channelId});
+            const found = await datastore.queryGuilds(db, {channelId});
             if (found.length) return found[0].guildId;
         }
     }
