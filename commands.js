@@ -31,17 +31,7 @@ async function handleCommand(client, db, message, subcmd, args) {
             return printBadUsage(message.channel);
         }
         const [query] = args;
-        let guild;
-        if (message.mentions.channels.size) {
-            const descriptionChannel = message.guild.channels.get(query);
-            if (!descriptionChannel) {
-                return message.channel.send('Error: No matching channels for that query string.');
-            }
-            const [found] = await datastore.queryGuilds(db, {channelId: query});
-            if (found) guild = found.guildId;
-        } else {
-            guild = await parseGuild(client, db, query, true);
-        }
+        const guild = await parseGuild(client, db, query, true);
         if (!guild) {
             return message.channel.send('Error: No matching guilds for that query string.');
         }
