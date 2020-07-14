@@ -223,7 +223,7 @@ async function partnerCommand(client, db, message, guilds) {
         const subject = await wizard.parse(
             'Choose a guild, specifying its name or id.',
             async content => {
-                const guildId = await parseGuild(client, db, content);
+                const guildId = await parseGuild(client, db, content, true);
                 if (guildId == null) return null;
                 return await datastore.findGuild(db, guildId);
             },
