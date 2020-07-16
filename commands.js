@@ -294,12 +294,13 @@ async function partnerCommand(client, db, message, guilds) {
         'You\'ve started the mass partner wizard. A mass partner is a one-to-many partner, like so:\n\n' +
         '`guild1, guild2, guild3` partnered with subject `guild4` would result in: ' +
         '`guild1 x guild4`, `guild2 x guild4`, `guild3 x guild4` (where `x` denotes a partner)\n\n' +
-        `You've selected ${guilds.length} guilds: ` + guilds.map(data => `<#${data.channelId}>`).join(' ')
+        `You've selected ${guilds.length} guilds: ` + guilds.map(data => `<#${data.channelId}>`).join(' ') + '\n' +
+        'Checking that guild partner channels have correct permissions...'
     );
     const amendments = [];
     guilds = guilds.filter(data => {
         if (!isGuildConfigured(data)) {
-            amendments.push(`Removed ${data.guildId} (<${data.channelId}>) because it is improperly configured.`);
+            amendments.push(`Removed ${data.guildId} (<#${data.channelId}>) because it is improperly configured.`);
             return false;
         }
         return true;
@@ -314,14 +315,14 @@ async function partnerCommand(client, db, message, guilds) {
             return false;
         }
         if (!checkWritePermission(data)) {
-            amendments.push(`Removed ${data.guildId} (<${data.channelId}>) because <#${data.partnerChannelId}> has bad permissions.`)
+            amendments.push(`Removed ${data.guildId} (<#${data.channelId}>) because <#${data.partnerChannelId}> has bad permissions.`)
             return false;
         }
         return true;
     });
     // if there were changes to the array
     if (amendments.length) {
-        amendments.push('This leaves ' + guilds.map(data => `<#${data.channelId}>`).join(' '));
+        amendments.push(`This leaves \`${guilds.length}\` guilds: ` + guilds.map(data => `<#${data.channelId}>`).join(' '));
     }
     for (const amendment of groupByLength(amendments, '\n', 2000)) {
         await wizard.send(amendment);
@@ -337,14 +338,14 @@ async function partnerCommand(client, db, message, guilds) {
     let emitter;
     if ('description'.startsWith(type)) {
         const subjectDescription = await wizard.ask('Paste the description (without a codeblock):');
-        let plan = ['Partner execution plan:'];
+        await wizard.send('Creating partner execution plan...');
         const posts = guilds.map(data => {
             return `• Post \`1\` message in \`${data.guild.name} #${data.partnerChannel.name}\` (<#${data.partnerChannelId}>)`
         });
         plan = plan.concat(posts);
 
         for (const msg of groupByLength(plan, '\n', 1900)) {
-            await wizard.send(msg);
+            await channel.send(msg);
         }
         const reaction = await wizard.react('Should I go ahead with the mass partner?', ['✅']);
         if (reaction != '✅') return;
@@ -372,14 +373,15 @@ async function partnerCommand(client, db, message, guilds) {
             return true;
         });
 
-        let plan = ['Partner execution plan:'];
+        await wizard.send('Creating partner execution plan...');
         const posts = guilds.map(data => {
             return `• Post \`1\` message in \`${data.guild.name} #${data.partnerChannel.name}\` (<#${data.partnerChannelId}>)`
         });
-        plan = plan.concat(posts);
-        plan.push(`• Post \`${guilds.length}\` messages in \`${subject.guild.name} #${subject.partnerChannel.name}\` (<#${subject.partnerChannelId}>)`);
-        plan.push('Should I go ahead with the mass partner?');
-        const reaction = await wizard.react(plan.join('\n'), ['✅']);
+        posts.push(`• Post \`${guilds.length}\` messages in \`${subject.guild.name} #${subject.partnerChannel.name}\` (<#${subject.partnerChannelId}>)`);
+        for (const msg of groupByLength(posts, '\n', 1900)) {
+            await channel.send(msg);
+        }
+        const reaction = await wizard.react('Should I go ahead with the mass partner?', ['✅']);
         if (reaction != '✅') return;
         emitter = partnerWithGuild(client, guilds, subject);
     } else {
@@ -473,7 +475,7 @@ async function allCommand(client, db, channel) {
     }
     let descriptors = guilds.map(guildData => getGuildDescriptor(client, guildData));
     descriptors.push('Note: description is omitted when using `k!all`. use `k!what` to see description.');
-    for (const content of groupByLength(descriptors, '\n', 2000)) {
+    for (const content of groupByLength(descriptors, '\n', 1900)) {
         await channel.send(content)
     }
 }
