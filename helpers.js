@@ -20,7 +20,7 @@ export function groupByLength(array, joiner, maxLength) {
     return newArray;
 }
 
-class QuitError extends Error {
+export class QuitError extends Error {
     constructor(message) {
         super(message);
     }
@@ -42,7 +42,11 @@ export function createWizard(member, channel, prefix) {
                     m => m.member.id == member.id && m.channel.id == channel.id,
                     {maxMatches: 1}
                 )).array();
-                if (response.content == 'quit') {
+                if (response.content.startsWith(prefix)) {
+                    response = null;
+                    continue;
+                }
+                if (response.content == 'quit' || response.content.startsWith('k!')) {
                     throw new QuitError('The user quiz the wizard');
                 }
             }
@@ -60,10 +64,16 @@ export function createWizard(member, channel, prefix) {
                     m => m.member.id == member.id && m.channel.id == channel.id,
                     {maxMatches: 1}
                 )).array();
-                if (response.content == 'quit' || response.content == 'k!add') {
+                if (response.content.startsWith(prefix)) {
+                    response = null;
+                    continue;
+                }
+                if (response.content == 'quit' || response.content.startsWith('k!')) {
                     throw new QuitError('The user quit the wizard');
                 }
-                parsed = await Promise.resolve( parser(response.content) );
+                try {
+                    parsed = await Promise.resolve( parser(response.content) );
+                } catch (e) {}
             }
             return parsed;
         },
@@ -194,7 +204,39 @@ export function partnerWithGuild(client, guilds, subjectGuild) {
 }
 
 export function checkCompatible(guildA, guildB) {
-    return true; // check member counts etc
+    console.log('checking compatible: ' + guildA.guild.name + ', ' + guildB.guild.name);
+
+    if (!isGuildConfigured(guildA) || !isGuildConfigured(guildB)) return false;
+    if (!guildA.meta && !guildB.meta) return true;
+
+    const metaA = guildA.meta || {};
+    const metaB = guildB.meta || {};
+
+    if (metaA.mincount && guildB.guild.memberCount < metaA.mincount) {
+        console.log('guildB memberCount too small');
+        return false;
+    }
+    if (metaB.mincount && guildA.guild.memberCount < metaB.mincount) {
+        console.log('guildA memberCount too small');
+        return false;
+    }
+    if (metaA.tags && metaB.exclude) {
+        for (const tag of metaA.tags) {
+            if (metaB.exclude.includes(tag)) {
+                console.log('metaB excludes tag: ' + tag);
+                return false;
+            }
+        }
+    }
+    if (metaB.tags && metaA.exclude) {
+        for (const tag of metaB.tags) {
+            if (metaA.exclude.includes(tag)) {
+                console.log('metaA excludes tag: ' + tag);
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 export function checkWritePermission(guildData) {

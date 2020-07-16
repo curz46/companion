@@ -4,7 +4,9 @@ import { groupByLength,
          createWizard,
          checkWritePermission,
          partnerWithDescription,
-         partnerWithGuild } from './helpers.js';
+         partnerWithGuild, 
+         checkCompatible,
+         QuitError} from './helpers.js';
 import { create as createBar } from './progress.js';
 
 const CHANNEL_REGEX = /<#(\d{18})>/;
@@ -94,6 +96,7 @@ async function handleCommand(client, db, message, subcmd, args) {
                 if (e.constructor == QuitError) {
                     return await message.channel.send('❌ Wizard expired/cancelled, re-run `k!partner` if you still want to partner.');
                 } else {
+                    console.error(e);
                     return await message.channel.send('❌ An error occurred:```' + e.message + '```');
                 }
             }
@@ -118,8 +121,80 @@ async function handleCommand(client, db, message, subcmd, args) {
             }
         }
     }
+    if (subcmd == 'mincount') {
+        if (args.length == 0) {
+            return await message.channel.send('Usage: `k!mincount <guild> [count]`');
+        }
+        const guildId = await parseGuild(client, db, args[0], true);
+        if (!guildId) {
+            return await message.channel.send('Error: No matching guilds for that query string.');
+        }
+        let count = -1;
+        if (args.length == 1) {
+            await removeGuildMeta(db, guildId, 'mincount');
+        } else {
+            count = parseInt(args[1]);
+            await updateGuildMeta(db, guildId, {mincount: count});
+        }
+        return await message.channel.send(`Updated meta \`mincount\` for \`${guildId}\` to \`${count}\``);
+    }
+    if (subcmd == 'tags') {
+        if (args.length <= 1) {
+            return await message.channel.send('Usage: `k!tags <guild> [tag1] [tag2] [tag3] ...`');
+        }
+        const guildId = await parseGuild(client, db, args[0], true);
+        if (!guildId) {
+            return await message.channel.send('Error: No matching guilds for that query string.');
+        }
+        const tags = args.slice(1);
+        if (tags.length == 0) {
+            await removeGuildMeta(db, guildId, ['tags']);
+        } else {
+            await updateGuildMeta(db, guildId, {tags});
+        }
+        return await message.channel.send(`Updated meta \`tags\` for \`${guildId}\` to \`${tags}\``);
+    }
+    if (subcmd == 'exclude') {
+        if (args.length <= 1) {
+            return await message.channel.send('Usage: `k!exclude <guild> [tag1] [tag2] [tag3] ...`');
+        }
+        const guildId = await parseGuild(client, db, args[0], true);
+        if (!guildId) {
+            return await message.channel.send('Error: No matching guilds for that query string.');
+        }
+        const exclude = args.slice(1);
+        if (exclude.length == 0) {
+            await removeGuildMeta(db, guildId, ['exclude']);
+        } else {
+            await updateGuildMeta(db, guildId, {exclude});
+        }
+        return await message.channel.send(`Updated meta \`exclude\` for \`${guildId}\` to \`${exclude}\``);
+    }
+    // if (subcmd == 'blacklist') {
+    // }
+    if (subcmd == 'filter') {
+        return await filterCommand(client, db, message);
+    }
     
     return message.channel.send('Unrecognised subargument. Use `k!help` for help.');
+}
+
+async function updateGuildMeta(db, guildId, meta) {
+    const data    = await datastore.findGuild(db, guildId);
+    const oldMeta = data.meta ? data.meta : {};
+    const newMeta = Object.assign({}, oldMeta, meta);
+    return await datastore.updateGuild(db, {guildId, meta: newMeta});
+}
+
+async function removeGuildMeta(db, guildId, keys) {
+    const data = await datastore.findGuild(db, guildId);
+    if (!data.meta) return;
+    for (const key of Object.keys(data.meta)) {
+        if (keys.includes(key)) {
+            delete data.meta[key];
+        }
+    }
+    return await datastore.updateGuild(db, {guildId, meta: data.meta});
 }
 
 function printBadUsage(channel) {
@@ -145,6 +220,74 @@ function printHelp(channel) {
     return channel.send('', {embed: {description: help.join('\n')}});
 }
 
+async function filterCommand(client, db, message) {
+    const wizard = createWizard(message.member, message.channel, '`[FILTER WIZARD]:` ');
+    await wizard.explain(
+        'You\'ve started the filter wizard. This is a simple helper to allow you to find guilds that are compatible with a set of guild metadata.'
+    );
+    const type = await wizard.ask(
+        'Do you want to reference a registered guild or enter values? (`guild`|`values`)',
+        'You must enter either `guild` or `values`',
+        choice => 'guild'.startsWith(choice) || 'values'.startsWith(choice)
+    );
+    let compatible;
+    if ('guild'.startsWith(type)) {
+        const guildData = await wizard.parse(
+            'Choose a guild, specifying its name or id.',
+            async content => {
+                const guildId = await parseGuild(client, db, content, true);
+                if (guildId == null) return null;
+                return await datastore.findGuild(db, guildId);
+            },
+            'I can\'t find that guild, try again.',
+            data => data != null && client.guilds.has(data.guildId)
+        );
+        await resolveData(client, message.guild, guildData);
+        // compatible = (await filterByMetadata(db, count, tags, exclude)).filter(g => g.guildId != guildData.guildId);
+        compatible = (await datastore.getGuilds(db))
+            .filter(g => g.guildId != guildData.guildId)
+            .map(async g => await resolveData(client, message.guild, g));
+        compatible = await Promise.all(compatible);
+        compatible = compatible
+            .filter(g => checkCompatible(guildData, g));
+    } else if ('values'.startsWith(type)) {
+        const count   = await wizard.parse('Enter the member count:', parseInt, 'Must be an integer', c => c >= 0);
+        const tags    = await wizard.parse('Enter a list of tags, space-separated:', tags => tags.split(' '));
+        const exclude = await wizard.parse('Enter a list of excluded tags, space-separated:', exclude => exclude.split(' '));
+        compatible = await filterByMetadata(db, count, tags, exclude);
+    }
+
+    const channelList = compatible.map(g => `<#${g.channelId}>`);
+    return await message.channel.send(
+        'Compatible: ' + (channelList.length ? channelList.join(' ') : '`none`')
+    );
+}
+
+async function filterByMetadata(db, memberCount, tags = [], exclude = []) {
+    return (await datastore.getGuilds(db))
+        .filter(guild => {
+            if (!isGuildConfigured(guild)) return false;
+            if (!guild.meta) return true;
+        
+            const meta = guild.meta || {};
+        
+            if (meta.mincount && memberCount < meta.mincount) {
+                return false;
+            }
+            if (meta.tags) {
+                for (const tag of meta.tags) {
+                    if (exclude.includes(tag)) return false;
+                }
+            }
+            if (meta.exclude) {
+                for (const tag of tags) {
+                    if (meta.exclude.includes(tag)) return false;
+                }
+            }
+            return true;
+        })
+}
+
 async function partnerCommand(client, db, message, guilds) {
     const wizard = createWizard(message.member, message.channel, '`[PARTNER WIZARD]:` ');
     await wizard.explain(
@@ -163,14 +306,11 @@ async function partnerCommand(client, db, message, guilds) {
     });
     // fill resolved guild/channels into data
     for (const data of guilds) {
-        data.guild = client.guilds.get(data.guildId);
-        data.channel = message.guild.channels.get(data.channelId);
-        data.partnerChannel = data.guild.channels.get(data.partnerChannelId);
-        [data.description] = await findDescription(data.channel);
+        await resolveData(client, message.guild, data);
     }
     guilds = guilds.filter(data => {
         if (!data.guild || !data.channel || !data.partnerChannel || !data.description) {
-            amendments.push(`Removed ${data.guildId} (<${data.channelId}>) because its configured values are missing.`);
+            amendments.push(`Removed \`${data.guildId}\` (<#${data.channelId}>) because its configured values are missing.`);
             return false;
         }
         if (!checkWritePermission(data)) {
@@ -220,10 +360,17 @@ async function partnerCommand(client, db, message, guilds) {
             'I can\'t find that guild, try again.',
             data => data != null && client.guilds.has(data.guildId)
         );
-        subject.guild = client.guilds.get(subject.guildId);
-        subject.channel = message.guild.channels.get(subject.channelId);
-        subject.partnerChannel = subject.guild.channels.get(subject.partnerChannelId);
-        [subject.description] = await findDescription(subject.channel);
+        await resolveData(client, message.guild, subject);
+
+        // check compatible
+        const guildAmendments = [];
+        guilds = guilds.filter(data => {
+            if (!checkCompatible(data, subject)) {
+                guildAmendments.push(`Removed ${data.guildId} (<${data.channelId}>) because it is incompatible with the subject.`)
+                return false;
+            }
+            return true;
+        });
 
         let plan = ['Partner execution plan:'];
         const posts = guilds.map(data => {
@@ -258,7 +405,6 @@ async function partnerCommand(client, db, message, guilds) {
         progress.edit('', {embed: {description: bar.draw('CANCELLED')}});
     });
 
-    await progress.react('❌');
     progress
         .awaitReactions((reaction, user) => reaction.emoji.name == '❌' && user.id == message.author.id, {max: 1})
         .then(reaction => { emitter.emit('cancel'); });
@@ -339,6 +485,10 @@ async function whatCommand(client, db, channel, guildId) {
     }
 
     const guild = client.guilds.get(guildId);
+
+    if (!guild) {
+        return `\`${guildId}: Not in guild\``;
+    }
     
     const descriptionChannelId = guildData.channelId || '0';
     const descriptionChannel = client.channels.get(descriptionChannelId);
@@ -349,16 +499,31 @@ async function whatCommand(client, db, channel, guildId) {
     const partnerChannelId = guildData.partnerChannelId || '0';
     const partnerChannel = client.channels.get(partnerChannelId);
 
+    const mincount = guildData.meta ? (guildData.meta.mincount || 'not set') : 'not set';
+    const tags     = guildData.meta ? (guildData.meta.tags || ['not set']).join(' ') : 'not set';
+    const exclude  = guildData.meta ? (guildData.meta.exclude || ['not set']).join(' ') : 'not set';
+
     const guildIdentifier = `\`• ${guild.id} (${guild.name})\``;
     const guildDescriptor = `${guildIdentifier}\n` +
         `Channel: <#${descriptionChannelId}>\n` +
-        `Partner Channel: <#${partnerChannelId}> (${partnerChannel.name})\n`;
+        `Partner Channel: <#${partnerChannelId}> (${partnerChannel.name})\n` +
+        `Minimum Member Count: \`${mincount}\`\n` +
+        `Tags: \`${tags}\`\n` +
+        `Exclude: \`${exclude}\``;
 
     const [partnerDescription, createdAt] = await findDescription(descriptionChannel) || '`[no description]`';
     const embedText   = partnerDescription ? partnerDescription : `React to a message in <#${descriptionChannelId}> to set the description.`;
     const embedFooter = `Description | Sent ${createdAt ? createdAt.toLocaleDateString("en-US") : '???'}`;
     
     return await channel.send(guildDescriptor, {embed: {description: embedText, footer: {text: embedFooter}}});
+}
+
+async function resolveData(client, currentGuild, guildData) {
+    guildData.guild = client.guilds.get(guildData.guildId);
+    guildData.channel = currentGuild.channels.get(guildData.channelId);
+    guildData.partnerChannel = guildData.guild.channels.get(guildData.partnerChannelId);
+    [guildData.description] = await findDescription(guildData.channel);
+    return guildData;
 }
 
 async function findDescription(channel) {
@@ -378,10 +543,10 @@ function getGuildDescriptor(client, guildData) {
     const guild = client.guilds.get(guildId);
 
     if (guild == null) {
-        return '`not in guild`';
+        return `\`${guildId}: Not in guild\``;
     }
     
-    const channelId = guildData.channelId || '0';
+    const descriptionChannelId = guildData.channelId || '0';
 
     const partnerChannelId = guildData.partnerChannelId || '0';
     const partnerChannel = guild.channels.get(partnerChannelId);
@@ -389,9 +554,16 @@ function getGuildDescriptor(client, guildData) {
 
     const guildIdentifier = `\`• ${guild.id} (${guild.name})\``;
 
+    const mincount = guildData.meta ? (guildData.meta.mincount || 'not set') : 'not set';
+    const tags     = guildData.meta ? (guildData.meta.tags || ['not set']).join(' ') : 'not set';
+    const exclude  = guildData.meta ? (guildData.meta.exclude || ['not set']).join(' ') : 'not set';
+
     return `${guildIdentifier}\n` +
-        `Channel: <#${channelId}>\n` +
-        `Partner Channel: <#${partnerChannelId}> (${partnerChannelName})\n`;
+        `Channel: <#${descriptionChannelId}>\n` +
+        `Partner Channel: <#${partnerChannelId}> (${partnerChannelName})\n` +
+        `Minimum Member Count: \`${mincount}\`\n` +
+        `Tags: \`${tags}\`\n` +
+        `Exclude: \`${exclude}\`\n`;
 }
 
 function parseChannel(string) {
