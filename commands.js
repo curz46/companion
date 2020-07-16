@@ -342,11 +342,10 @@ async function partnerCommand(client, db, message, guilds) {
             return `• Post \`1\` message in \`${data.guild.name} #${data.partnerChannel.name}\` (<#${data.partnerChannelId}>)`
         });
         plan = plan.concat(posts);
-        // for (const plan of groupByLength(plan, '\n', 2000)) {
-        //     await wizard.send(plan);
-        // }
-        plan.push('Should I go ahead with the mass partner?');
-        const reaction = await wizard.react(plan.join('\n'), ['✅']);
+        for (const plan of groupByLength(plan, '\n', 1900)) {
+            await wizard.send(plan);
+        }
+        const reaction = await wizard.react('Should I go ahead with the mass partner?', ['✅']);
         if (reaction != '✅') return;
         emitter = partnerWithDescription(client, guilds, subjectDescription);
     } else if ('guild'.startsWith(type)) {
