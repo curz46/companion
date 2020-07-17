@@ -342,9 +342,7 @@ async function partnerCommand(client, db, message, guilds) {
         const posts = guilds.map(data => {
             return `• Post \`1\` message in \`${data.guild.name} #${data.partnerChannel.name}\` (<#${data.partnerChannelId}>)`
         });
-        plan = plan.concat(posts);
-
-        for (const msg of groupByLength(plan, '\n', 1900)) {
+        for (const msg of groupByLength(posts, '\n', 1900)) {
             await channel.send(msg);
         }
         const reaction = await wizard.react('Should I go ahead with the mass partner?', ['✅']);
