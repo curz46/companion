@@ -9,7 +9,7 @@ export function groupByLength(array, joiner, maxLength) {
         const element = array[i];
     	const existingContent = newArray[index];
         if ((existingContent.length + element.length) > maxLength) {
-            newArray.push(array);
+            newArray.push(element);
         } else {
             newArray[index] = existingContent + joiner + element;
         }

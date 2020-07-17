@@ -139,32 +139,34 @@ async function handleCommand(client, db, message, subcmd, args) {
         return await message.channel.send(`Updated meta \`mincount\` for \`${guildId}\` to \`${count}\``);
     }
     if (subcmd == 'tags') {
-        if (args.length <= 1) {
+        if (args.length < 1) {
             return await message.channel.send('Usage: `k!tags <guild> [tag1] [tag2] [tag3] ...`');
         }
         const guildId = await parseGuild(client, db, args[0], true);
         if (!guildId) {
             return await message.channel.send('Error: No matching guilds for that query string.');
         }
-        const tags = args.slice(1);
+        let tags = args.slice(1);
         if (tags.length == 0) {
             await removeGuildMeta(db, guildId, ['tags']);
+	    tags = ' ';
         } else {
             await updateGuildMeta(db, guildId, {tags});
         }
         return await message.channel.send(`Updated meta \`tags\` for \`${guildId}\` to \`${tags}\``);
     }
     if (subcmd == 'exclude') {
-        if (args.length <= 1) {
+        if (args.length < 1) {
             return await message.channel.send('Usage: `k!exclude <guild> [tag1] [tag2] [tag3] ...`');
         }
         const guildId = await parseGuild(client, db, args[0], true);
         if (!guildId) {
             return await message.channel.send('Error: No matching guilds for that query string.');
         }
-        const exclude = args.slice(1);
+        let exclude = args.slice(1);
         if (exclude.length == 0) {
             await removeGuildMeta(db, guildId, ['exclude']);
+	    exclude = ' ';
         } else {
             await updateGuildMeta(db, guildId, {exclude});
         }
@@ -343,7 +345,7 @@ async function partnerCommand(client, db, message, guilds) {
             return `• Post \`1\` message in \`${data.guild.name} #${data.partnerChannel.name}\` (<#${data.partnerChannelId}>)`
         });
         for (const msg of groupByLength(posts, '\n', 1900)) {
-            await channel.send(msg);
+            await message.channel.send(msg);
         }
         const reaction = await wizard.react('Should I go ahead with the mass partner?', ['✅']);
         if (reaction != '✅') return;
@@ -377,7 +379,7 @@ async function partnerCommand(client, db, message, guilds) {
         });
         posts.push(`• Post \`${guilds.length}\` messages in \`${subject.guild.name} #${subject.partnerChannel.name}\` (<#${subject.partnerChannelId}>)`);
         for (const msg of groupByLength(posts, '\n', 1900)) {
-            await channel.send(msg);
+            await message.channel.send(msg);
         }
         const reaction = await wizard.react('Should I go ahead with the mass partner?', ['✅']);
         if (reaction != '✅') return;
