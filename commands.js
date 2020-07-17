@@ -208,16 +208,20 @@ function printHelp(channel) {
         '`<>` denotes required, `[]` denotes optional. omit `<>` or `[]` when specifying the arguments',
         '`k!all` - print all guilds & their configured values',
         '`k!what <channel|guild name|guild id>` - print details about a guild',
-        '`k!partner <guild1> [guild2] [guild3] [...]` - begin a mass partner with these guilds',
+        '`k!partner <guild1> [guild2 guild3 ...]` - begin a mass partner with these guilds',
         '`k!partner all` - begin a mass partner with all configured guilds',
-        '`k!combo <guild1> [guild2] [guild3] [...]` - begin a combo partner with these guilds',
+        '`k!combo <guild1> [guild2 guild3 ...]` - begin a combo partner with these guilds',
         '`k!combo all` - being a combo partner with all guilds',
         '`k!undo` - delete all messages sent in the last `k!mass` partner',
         '`k!kill` - kill the bot, immediately stopping activity',
-        '`k!add` - add a guild to the database',
+        '`k!add` - start the add wizard',
         '`k!remove <channel|guild name|guild id>` - remove a guild from the database',
         '`k!channel <guild name|guild id> <channel|id> - update a guild\'s channel`',
-        '`k!partnerchannel <guild name|guild id> <channel|id>` - update a guild\'s partner channel'
+        '`k!partnerchannel <guild name|guild id> <channel|id>` - update a guild\'s partner channel',
+        '`k!mincount <channel|guild name|guild id> [count]` - set a guild\'s minimum count',
+        '`k!tags <channel|guild name|guild id> [tag1 tag2 tag3 ...]` - set a guild\'s tags',
+        '`k!exclude <channel|guild name|guild id> [tag1 tag2 tag3 ...] - set a guild\'s excluded tags`',
+        '`k!filter <channel|guild name|guild id>` - start the filter wizard'
     ];
     return channel.send('', {embed: {description: help.join('\n')}});
 }
@@ -365,13 +369,15 @@ async function partnerCommand(client, db, message, guilds) {
 
         // check compatible
         const guildAmendments = [];
-        guilds = guilds.filter(data => {
-            if (!checkCompatible(data, subject)) {
-                guildAmendments.push(`Removed ${data.guildId} (<${data.channelId}>) because it is incompatible with the subject.`)
-                return false;
-            }
-            return true;
-        });
+        guilds = guilds
+            .filter(data => subject.guildId != data.guildId)
+            .filter(data => {
+                if (!checkCompatible(data, subject)) {
+                    guildAmendments.push(`Removed ${data.guildId} (<${data.channelId}>) because it is incompatible with the subject.`)
+                    return false;
+                }
+                return true;
+            });
 
         await wizard.send('Creating partner execution plan...');
         const posts = guilds.map(data => {
