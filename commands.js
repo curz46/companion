@@ -104,13 +104,20 @@ async function handleCommand(client, db, message, subcmd, args) {
         if (args.length == 0) {
             return await message.channel.send('Usage: `k!partner <guild1> <guild2> ...`');
         }
+        const negate  = args.includes('!');
+        const targets = args.filter(a => a != '!');
         const guildIds = await Promise.all(
-            args.map(arg => parseGuild(client, db, arg, true))
+            targets.map(arg => parseGuild(client, db, arg, true))
         );
-        console.log(guildIds);
-        const guilds = await Promise.all(
-            guildIds.map(async id => await datastore.findGuild(db, id))
-        );
+        let guilds;
+        if (negate) {
+            guilds = await datastore.getGuilds(db);
+            guilds = guilds.filter(g => !guildIds.includes(g.guildId));
+        } else {
+            guilds = await Promise.all(
+                guildIds.map(async id => await datastore.findGuild(db, id))
+            );
+        }
         try {
             return await partnerCommand(client, db, message, guilds);
         } catch (e) {
