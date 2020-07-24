@@ -319,8 +319,13 @@ async function partnerCommand(client, db, message, guilds) {
         return true;
     });
     // fill resolved guild/channels into data
-    for (const data of guilds) {
-        await resolveData(client, message.guild, data);
+    for (let i = guilds.length; i--;) {
+        try {
+            await resolveData(client, message.guild, guilds[i]);
+        } catch (e) {
+            guilds.splice(i, 1);
+            amendments.push(`Removed ${guilds[i].guildId} (<#${guilds[i].channelId}>) because I am no longer in the guild.`);
+        }
     }
     guilds = guilds.filter(data => {
         if (!data.guild || !data.channel || !data.partnerChannel || !data.description) {
@@ -373,6 +378,7 @@ async function partnerCommand(client, db, message, guilds) {
             data => data != null && client.guilds.has(data.guildId)
         );
         await resolveData(client, message.guild, subject);
+
 
         // check compatible
         const guildAmendments = [];
@@ -535,6 +541,9 @@ async function whatCommand(client, db, channel, guildId) {
 
 async function resolveData(client, currentGuild, guildData) {
     guildData.guild = client.guilds.get(guildData.guildId);
+    if (!guildData.guild) {
+        throw new Error('Cannot resolve guild attributes because I\'m not in that guild');
+    }
     guildData.channel = currentGuild.channels.get(guildData.channelId);
     guildData.partnerChannel = guildData.guild.channels.get(guildData.partnerChannelId);
     [guildData.description] = await findDescription(guildData.channel);
