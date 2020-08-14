@@ -567,7 +567,7 @@ function getGuildDescriptor(client, guildData) {
     const guild = client.guilds.get(guildId);
 
     if (guild == null) {
-        return `\`${guildId}: Not in guild\``;
+        return `\`${guildId}: Not in guild\`\n`;
     }
     
     const descriptionChannelId = guildData.channelId || '0';
